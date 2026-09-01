@@ -1044,10 +1044,17 @@ pub fn db_media_to_item(media: db::Media, hide_sources: bool) -> BaseItemDto {
     item.external_urls = external_urls;
 
     // several dlients require at least one stream
+    //
+    // `Stream` is included because Android TV refetches an item by MediaSource
+    // id when the user picks a different version, and `item_for_user` answers
+    // that by resolving the Stream row and setting `sources` to the row itself.
+    // Leaving the kind out here dropped that work on the floor and returned a
+    // response with no `MediaSources` at all.
     if !hide_sources
         && (media.kind == db::MediaKind::Movie
             || media.kind == db::MediaKind::Episode
-            || media.kind == db::MediaKind::Track)
+            || media.kind == db::MediaKind::Track
+            || media.kind == db::MediaKind::Stream)
     {
         item.can_download = Some(true);
         item.media_sources = match media
@@ -1225,6 +1232,38 @@ pub struct RemoteSubtitleInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: `GET /Items/{id}` where `{id}` is a MediaSource id — the
+    /// request Android TV makes when the user switches versions — resolved the
+    /// Stream row and then returned it with `MediaSources` absent entirely,
+    /// because `Stream` was missing from the list of kinds that emit the field.
+    ///
+    /// A client that reads `MediaSources` off that response without a
+    /// `PlaybackInfo` round-trip gets null. Jellyfin for Android TV dereferences
+    /// it unguarded and dies with
+    /// `NullPointerException: ...MediaSourceInfo.getMediaStreams()` in
+    /// `PlaybackController.buildExoPlayerOptions`, then relaunches and repeats.
+    #[test]
+    fn db_media_to_item_emits_media_sources_for_a_stream_row() {
+        let row = db::Media {
+            kind: db::MediaKind::Stream,
+            title: "1080p WEB-DL".into(),
+            ..Default::default()
+        };
+        // What `item_for_user` does for a Stream: the row is its own source.
+        let mut media = row.clone();
+        media.sources = Some(vec![row]);
+
+        let item = db_media_to_item(media, false);
+        let sources = item
+            .media_sources
+            .expect("a Stream row must carry MediaSources, not omit the field");
+        assert_eq!(
+            sources.len(),
+            1,
+            "clients select MediaSources[0] with no PlaybackInfo round-trip"
+        );
+    }
 
     #[test]
     fn stub_sources_is_always_exactly_one_real_entry() {
