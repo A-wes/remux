@@ -1309,19 +1309,22 @@ async fn fetch_tmdb_meta(
                         .with_cache(Duration::from_secs(360)),
                     )
                     .await?;
-                let external_ids = db::ExternalIds {
+                let mut external_ids = db::ExternalIds {
                     tmdb: Some(movie_details.id),
                     imdb: movie_details
                         .imdb_id
                         .as_deref()
-                        .and_then(|s| db::NonEmptyString::try_new(s.to_string()).ok())
-                        .or_else(|| {
-                            ids.imdb
-                                .clone()
-                        }),
-                    tvdb: ids.tvdb,
+                        .and_then(|s| db::NonEmptyString::try_new(s.to_string()).ok()),
                     ..Default::default()
                 };
+                // Keep every ID the row already carries. TMDB knows nothing
+                // about `kitsu` / `custom_stremio_id`, and those are exactly what
+                // a Kitsu-imported anime's stable UUID is derived from — dropping
+                // them here makes `Media::validate` reject the row on the next
+                // upsert ("UUID mismatch") and the item silently disappears from
+                // its library. `custom_stremio_type` is required by the addon's
+                // own meta/stream routes, which 404 without it.
+                external_ids.merge(ids, false);
                 let logo = movie_details
                     .images
                     .as_ref()
@@ -1510,7 +1513,7 @@ async fn fetch_tmdb_meta(
                 let tmdb_ext = tv_details
                     .external_ids
                     .as_ref();
-                let external_ids = db::ExternalIds {
+                let mut external_ids = db::ExternalIds {
                     tmdb: Some(tv_details.id),
                     imdb: tmdb_ext
                         .and_then(|e| {
@@ -1521,6 +1524,14 @@ async fn fetch_tmdb_meta(
                     tvdb: tmdb_ext.and_then(|e| e.tvdb_id),
                     ..Default::default()
                 };
+                // Keep every ID the row already carries. TMDB knows nothing
+                // about `kitsu` / `custom_stremio_id`, and those are exactly what
+                // a Kitsu-imported anime's stable UUID is derived from — dropping
+                // them here makes `Media::validate` reject the row on the next
+                // upsert ("UUID mismatch") and the item silently disappears from
+                // its library. `custom_stremio_type` is required by the addon's
+                // own meta/stream routes, which 404 without it.
+                external_ids.merge(ids, false);
                 let country = tv_details
                     .origin_country
                     .into_iter()

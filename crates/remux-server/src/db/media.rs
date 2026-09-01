@@ -2193,9 +2193,7 @@ impl Media {
                 )));
             }
             let expected = Uuid::from(&raw);
-            if expected != self.id
-                && !Self::ext_id_uuid_candidates(self).contains(&self.id)
-            {
+            if expected != self.id && !Self::ext_id_uuid_all(self).contains(&self.id) {
                 return Err(MediaError::ValidationError(format!(
                     "{:?} '{}' UUID mismatch: id={} expected={}",
                     self.kind, self.title, self.id, expected
@@ -2788,6 +2786,19 @@ impl Media {
     /// external IDs. The item's own current UUID is excluded so only *different*
     /// rows can match.
     pub fn ext_id_uuid_candidates(item: &Self) -> Vec<Uuid> {
+        let mut candidates = Self::ext_id_uuid_all(item);
+        candidates.retain(|u| *u != item.id);
+        candidates
+    }
+
+    /// Every UUID this row could legitimately be keyed under, derived from its
+    /// own external IDs — *including* the one it currently holds.
+    ///
+    /// `validate` needs the unfiltered set. An item whose canonical ID changed
+    /// after it was first written (anime imported from Kitsu that later gains an
+    /// IMDB ID, promoting `imdb` over `custom_stremio_id` in the ranking) still
+    /// legitimately owns the UUID it was stored and linked under.
+    fn ext_id_uuid_all(item: &Self) -> Vec<Uuid> {
         use crate::common::stable_media_uuid;
         let kind = &item.kind;
         let ext = &item.external_ids;
@@ -2883,7 +2894,6 @@ impl Media {
             }
             _ => {}
         }
-        candidates.retain(|u| *u != item.id);
         candidates
     }
 
@@ -8314,6 +8324,56 @@ mod tests {
                 "kitsu:555"
             ]
         );
+    }
+
+    /// Regression: anime imported from the Kitsu catalog derives its stable
+    /// UUID from `custom_stremio_id` ("kitsu:N"), the only identity it has —
+    /// anime is often absent from IMDB. TMDB enrichment used to rebuild
+    /// `ExternalIds` from scratch, dropping `kitsu`/`custom_stremio_id`, so
+    /// `validate` rejected the row on the next upsert ("UUID mismatch") and the
+    /// series silently vanished from the library that imported it. IDs below are
+    /// the real ones from a production refresh ("Daemons of the Shadow Realm").
+    #[test]
+    fn kitsu_series_still_validates_after_tmdb_enrichment() {
+        let mut media = Media {
+            kind: MediaKind::Series,
+            title: "Daemons of the Shadow Realm".to_string(),
+            external_ids: ExternalIds::from_stremio_id("kitsu:50023"),
+            ..Default::default()
+        };
+        media.id = Uuid::from(&media.media_id_raw());
+        assert_eq!(
+            media
+                .id
+                .to_string(),
+            "cffb332d-0f99-5725-968d-26d2d5cc0e8c",
+            "a kitsu-only series is keyed on its Stremio ID"
+        );
+        media
+            .validate()
+            .expect("freshly imported kitsu series must be valid");
+
+        // Everything TMDB contributes; it knows nothing about kitsu.
+        let tmdb_ids = ExternalIds {
+            tmdb: Some(260463),
+            imdb: NonEmptyString::try_new("tt37532356".to_string()).ok(),
+            tvdb: Some(452711),
+            ..Default::default()
+        };
+        media
+            .external_ids
+            .merge(&tmdb_ids, false);
+
+        assert_eq!(
+            media
+                .external_ids
+                .kitsu,
+            Some(50023),
+            "enrichment must not drop the ID the UUID was derived from"
+        );
+        media
+            .validate()
+            .expect("enrichment must not invalidate the row it just enriched");
     }
 
     #[test]
