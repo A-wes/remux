@@ -1270,6 +1270,9 @@ pub struct MediaFilter {
     /// within the past year are always hidden (theatrical-only, digital date unknown).
     /// Older items without a digital date fall back to `released_at`.
     pub digital_released_before: Option<NaiveDateTime>,
+    /// If set, only return items whose `released_at` is on or after this date.
+    /// Used by /shows/upcoming to surface future-airing episodes.
+    pub released_after: Option<NaiveDateTime>,
     /// Sort order for results. Mapped from Jellyfin's ItemSortBy.
     pub sort_by: Vec<api::ItemSortBy>,
     pub sort_order: Vec<api::SortOrder>,
@@ -1297,6 +1300,8 @@ pub struct MediaFilter {
     pub program_kinds: Option<Vec<ProgramKind>>,
     /// Filter episodes/seasons/tracks by their grandparent (series, artist, etc.).
     pub grandparent_id: Option<Uuid>,
+    /// Filter by multiple grandparent IDs (OR). Used e.g. for upcoming episodes scoped to a collection's series.
+    pub grandparent_ids: Option<Vec<Uuid>>,
     /// Pre-fetched parent item. When set, `get_by_filter` uses it to detect
     /// manual collections and switches to a JOIN on media_relations.
     /// If `parent_id` is set but this is `None`, the non-JOIN path is used.
@@ -1487,6 +1492,13 @@ pub struct Media {
     /// User-defined name override; takes precedence over `title` for display.
     pub custom_name: Option<String>,
     pub program_kind: Option<ProgramKind>,
+
+    // --- playlist ownership ---
+    /// User that created this playlist. `None` for non-playlist media.
+    pub user_id: Option<Uuid>,
+    /// When true, the playlist is visible to all authenticated users.
+    #[sqlx(default)]
+    pub public: bool,
 
     // --- field locking ---
     /// When true, no metadata provider may overwrite any field on this item.
@@ -2234,9 +2246,10 @@ impl Media {
             live_start, live_end, tvg_id, channel_number, enabled, sort_order, custom_name, digital_released_at, status, refreshed_at, grandparent_id,
             collection_smart_filter, country, program_kind, collection_latest_auto_unplayed, collection_latest_sort_digital,
             collection_default_sort, collection_default_sort_order,
-            original_language, is_locked, locked_fields, album_kind, end_date
+            original_language, is_locked, locked_fields, album_kind, end_date,
+            user_id, public
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49)
         ON CONFLICT (id) DO UPDATE SET
             title = excluded.title,
             kind = excluded.kind,
@@ -2288,7 +2301,9 @@ impl Media {
             is_locked = excluded.is_locked,
             locked_fields = excluded.locked_fields,
             album_kind = COALESCE(excluded.album_kind, media.album_kind),
-            end_date = COALESCE(excluded.end_date, media.end_date)
+            end_date = COALESCE(excluded.end_date, media.end_date),
+            user_id = COALESCE(excluded.user_id, media.user_id),
+            public = excluded.public
         "#,
         )
         .bind(self.id)
@@ -2338,6 +2353,8 @@ impl Media {
         .bind(sqlx::types::Json(&self.locked_fields))
         .bind(&self.album_kind)
         .bind(self.end_date)
+        .bind(self.user_id)
+        .bind(self.public)
         .execute(db)
         .await?;
 
@@ -3644,6 +3661,11 @@ impl Media {
                 qb.push(" AND grandparent_id = ")
                     .push_bind(grandparent_id);
             }
+            if let Some(ids) = &filter.grandparent_ids {
+                if !ids.is_empty() {
+                    qb.push_in("grandparent_id", ids);
+                }
+            }
             if let Some(promoted) = &filter.promoted {
                 qb.push(" AND promoted = ")
                     .push_bind(promoted);
@@ -3651,6 +3673,19 @@ impl Media {
             if let Some(kind) = &filter.kind {
                 if resumable_ids.is_none() {
                     qb.push_in("kind", &kind);
+                }
+                // Scope playlist visibility: show only public playlists or those owned by the caller.
+                let has_playlist = kind
+                    .iter()
+                    .any(|k| *k == MediaKind::Playlist);
+                if has_playlist {
+                    if let Some(uid) = filter.user_id {
+                        qb.push(" AND (kind != 'playlist' OR public = 1 OR user_id = ");
+                        qb.push_bind(uid);
+                        qb.push(")");
+                    } else {
+                        qb.push(" AND (kind != 'playlist' OR public = 1)");
+                    }
                 }
             }
             if let Some(kinds) = &filter.album_kinds {
@@ -3944,6 +3979,11 @@ impl Media {
                         needs_parent_fallback,
                     );
                 }
+            }
+
+            if let Some(after) = filter.released_after {
+                qb.push(" AND released_at >= ")
+                    .push_bind(after);
             }
 
             if let Some(ref f) = filter.filter_rules {

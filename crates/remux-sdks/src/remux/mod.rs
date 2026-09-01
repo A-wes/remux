@@ -4747,6 +4747,7 @@ pub struct CreatePlaylistDto {
     pub ids: Vec<Uuid>,
     pub user_id: Option<Uuid>,
     pub media_type: Option<MediaType>,
+    pub is_public: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -4754,6 +4755,7 @@ pub struct CreatePlaylistDto {
 pub struct UpdatePlaylistDto {
     pub name: Option<String>,
     pub ids: Option<Vec<Uuid>>,
+    pub is_public: Option<bool>,
 }
 
 impl Endpoint for PublicSystemInfo {
