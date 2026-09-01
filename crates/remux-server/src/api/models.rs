@@ -297,23 +297,36 @@ pub fn db_state_to_dto(
 
 /// Stub sources for items without resolvable sources: two entries so
 /// multi-version clients (e.g. Infuse) expose a version picker.
+/// A single placeholder `MediaSourceInfo` for an item whose real sources
+/// haven't been resolved for this request (e.g. the caller's `fields` didn't
+/// request `MediaSources`) or resolved to none.
+///
+/// Must always be exactly one real (non-null) entry: some Jellyfin clients
+/// read `MediaSources` straight off a `GET /Items/{id}` response and select
+/// an entry without an intervening `PlaybackInfo` call (e.g. playing
+/// directly from a resume/continue-watching row) — a missing or empty
+/// `MediaSources` array crashes those clients outright rather than showing
+/// an error. Preserves any `media_streams` already known from the item's own
+/// probe data (e.g. flat/local media with no addon-resolved child Stream
+/// rows) rather than discarding them.
 fn stub_sources(media: &db::Media) -> Vec<MediaSourceInfo> {
-    vec![
-        media
-            .clone()
-            .into(),
-        MediaSourceInfo {
-            id: uuid::Uuid::new_v5(
-                &uuid::Uuid::NAMESPACE_OID,
-                format!("{}-stub2", media.id).as_bytes(),
-            ),
-            e_tag: media.id,
-            name: Some(format!("{} (2)", media.title)),
-            protocol: MediaProtocol::File,
-            container: None,
-            ..Default::default()
-        },
-    ]
+    let media_streams = media
+        .probe_data
+        .as_ref()
+        .map(|p| {
+            p.media_streams
+                .clone()
+        })
+        .unwrap_or_default();
+    vec![MediaSourceInfo {
+        id: media.id,
+        e_tag: media.id,
+        name: Some("No streams found".to_string()),
+        protocol: MediaProtocol::File,
+        path: Some(format!("/remux/{}", media.id)),
+        media_streams,
+        ..Default::default()
+    }]
 }
 
 pub fn db_media_to_item(media: db::Media, hide_sources: bool) -> BaseItemDto {
@@ -1207,4 +1220,71 @@ pub struct RemoteSubtitleInfo {
     pub is_hash_match: Option<bool>,
     pub ai_translated: Option<bool>,
     pub machine_translated: Option<bool>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stub_sources_is_always_exactly_one_real_entry() {
+        // A client that skips PlaybackInfo and plays straight off
+        // MediaSources (e.g. from a resume row) must find a real object at
+        // MediaSources[0], never a missing/empty array — that's what causes
+        // the null-MediaSourceInfo crash this fallback exists to prevent.
+        let media = db::Media {
+            kind: db::MediaKind::Movie,
+            title: "Test Movie".into(),
+            ..Default::default()
+        };
+        let sources = stub_sources(&media);
+        assert_eq!(sources.len(), 1);
+    }
+
+    #[test]
+    fn stub_sources_preserves_media_streams_known_from_the_item_s_own_probe_data() {
+        // Flat/local media can carry probe data directly on the parent row
+        // with no addon-resolved child Stream rows. When that happens this
+        // fallback must not discard the already-known streams (e.g. subtitle
+        // tracks a language-preference fallback still needs to see).
+        let media = db::Media {
+            kind: db::MediaKind::Movie,
+            title: "Test Movie".into(),
+            probe_data: Some(MediaSourceInfo {
+                media_streams: vec![MediaStream {
+                    type_: Some(MediaStreamType::Subtitle),
+                    language: Some("fra".into()),
+                    index: 2,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let sources = stub_sources(&media);
+        assert_eq!(
+            sources[0]
+                .media_streams
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn db_media_to_item_never_returns_empty_media_sources_for_a_movie() {
+        let media = db::Media {
+            kind: db::MediaKind::Movie,
+            title: "Test Movie".into(),
+            sources: None,
+            ..Default::default()
+        };
+        let item = db_media_to_item(media, false);
+        let sources = item
+            .media_sources
+            .expect("a playable item must always carry MediaSources");
+        assert!(
+            !sources.is_empty(),
+            "a playable item must never advertise zero MediaSources"
+        );
+    }
 }

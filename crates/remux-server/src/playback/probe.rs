@@ -346,9 +346,30 @@ struct FfprobeStream {
     pix_fmt: Option<String>,
     bits_per_raw_sample: Option<String>,
     #[serde(default)]
+    extradata_size: Option<i64>,
+    #[serde(default)]
     tags: HashMap<String, String>,
     #[serde(default)]
     disposition: FfprobeDisposition,
+}
+
+/// Fixed-size portion of an `HEVCDecoderConfigurationRecord` (ISO/IEC
+/// 14496-15 §8.3.3.1.2) up to and including `numOfArrays`. A record exactly
+/// this size has `numOfArrays == 0` — no VPS/SPS/PPS arrays, i.e. no
+/// out-of-band parameter sets. Any array data pushes the size above this.
+const HEVC_DECODER_CONFIG_HEADER_ONLY_SIZE: i64 = 23;
+
+/// Whether an HEVC stream's probed extradata carries out-of-band VPS/SPS/PPS
+/// arrays (a full `HEVCDecoderConfigurationRecord`), based on its byte size.
+/// `None` when extradata size wasn't reported by ffprobe (older builds).
+///
+/// This distinguishes normal HEVC sources from a specific class of WEB-DL
+/// repackage that writes only the fixed header (`numOfArrays = 0`) and keeps
+/// parameter sets in-band in the bitstream instead. Forcing the `hvc1`
+/// sample-entry tag on a stream copy of the latter yields an empty `hvcC`
+/// box that strict HEVC parsers (e.g. ExoPlayer's `HevcConfig.parse`) reject.
+fn hevc_params_out_of_band(extradata_size: Option<i64>) -> Option<bool> {
+    extradata_size.map(|n| n > HEVC_DECODER_CONFIG_HEADER_ONLY_SIZE)
 }
 
 /// Derive bit depth from a pixel format string (e.g. "yuv420p10le" → 10, "yuv420p" → 8).
@@ -720,6 +741,9 @@ pub fn probe_media(url: &str) -> Result<(api::MediaSourceInfo, MediaSegments)> {
                             .as_deref()
                             .and_then(bit_depth_from_pix_fmt)
                     });
+                let remux_ext = (codec == "hevc").then(|| api::MediaStreamRemuxExt {
+                    hevc_params_out_of_band: hevc_params_out_of_band(s.extradata_size),
+                });
                 streams.push(api::MediaStream {
                     type_: Some(api::MediaStreamType::Video),
                     index: s.index,
@@ -751,6 +775,7 @@ pub fn probe_media(url: &str) -> Result<(api::MediaSourceInfo, MediaSegments)> {
                     display_title: display_title_video(&meta),
                     language: language.map(str::to_string),
                     title,
+                    remux: remux_ext,
                     ..Default::default()
                 });
                 video_idx += 1;
@@ -1319,6 +1344,18 @@ mod probe_tests {
         assert_eq!(bit_depth_from_pix_fmt("yuv420p"), Some(8));
         assert_eq!(bit_depth_from_pix_fmt("yuvj420p"), Some(8));
         assert_eq!(bit_depth_from_pix_fmt(""), None);
+    }
+
+    #[test]
+    fn hevc_params_out_of_band_detects_header_only_record() {
+        // A bare HEVCDecoderConfigurationRecord (numOfArrays = 0) is exactly
+        // 23 bytes — no VPS/SPS/PPS arrays, i.e. no out-of-band parameter sets.
+        assert_eq!(hevc_params_out_of_band(Some(23)), Some(false));
+        // Anything larger carries at least one array.
+        assert_eq!(hevc_params_out_of_band(Some(84)), Some(true));
+        assert_eq!(hevc_params_out_of_band(Some(111)), Some(true));
+        // Unknown size (older ffprobe) — caller must not assume either way.
+        assert_eq!(hevc_params_out_of_band(None), None);
     }
     use crate::stream::{StreamDescriptor, StreamInfo};
     use remux_sdks::remux::{MediaSegments, MediaStream, MediaStreamType};

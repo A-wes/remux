@@ -1968,6 +1968,8 @@ pub enum TranscodeReason {
     SubtitleCodecNotSupported(String),
     VideoRangeTypeNotSupported(String),
     VideoCodecTagNotSupported(String),
+    VideoProfileNotSupported(String),
+    VideoBitDepthNotSupported(String),
     ContainerBitrateExceedsLimit,
 }
 
@@ -1980,6 +1982,8 @@ impl TranscodeReason {
             Self::SubtitleCodecNotSupported(_) => "SubtitleCodecNotSupported",
             Self::VideoRangeTypeNotSupported(_) => "VideoRangeTypeNotSupported",
             Self::VideoCodecTagNotSupported(_) => "VideoCodecTagNotSupported",
+            Self::VideoProfileNotSupported(_) => "VideoProfileNotSupported",
+            Self::VideoBitDepthNotSupported(_) => "VideoBitDepthNotSupported",
             Self::ContainerBitrateExceedsLimit => "ContainerBitrateExceedsLimit",
         }
     }
@@ -1999,6 +2003,12 @@ impl std::fmt::Debug for TranscodeReason {
             }
             Self::VideoCodecTagNotSupported(d) => {
                 write!(f, "VideoCodecTagNotSupported({d})")
+            }
+            Self::VideoProfileNotSupported(d) => {
+                write!(f, "VideoProfileNotSupported({d})")
+            }
+            Self::VideoBitDepthNotSupported(d) => {
+                write!(f, "VideoBitDepthNotSupported({d})")
             }
             Self::ContainerBitrateExceedsLimit => {
                 write!(f, "ContainerBitrateExceedsLimit")
@@ -2091,6 +2101,12 @@ impl TranscodeReasons {
                 }
                 "VideoCodecTagNotSupported" => {
                     Some(TranscodeReason::VideoCodecTagNotSupported(String::new()))
+                }
+                "VideoProfileNotSupported" => {
+                    Some(TranscodeReason::VideoProfileNotSupported(String::new()))
+                }
+                "VideoBitDepthNotSupported" => {
+                    Some(TranscodeReason::VideoBitDepthNotSupported(String::new()))
                 }
                 "ContainerBitrateExceedsLimit" => {
                     Some(TranscodeReason::ContainerBitrateExceedsLimit)
@@ -3014,6 +3030,20 @@ pub struct UpdateUserPassword {
     pub reset_password: Option<bool>,
 }
 
+/// Additive `remux`-namespace extension fields for a `MediaStream`. See
+/// `MediaStreamRemuxExt::hevc_params_out_of_band` for why this exists.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct MediaStreamRemuxExt {
+    /// For an HEVC video stream: whether the source's probed extradata is a
+    /// full `HEVCDecoderConfigurationRecord` carrying VPS/SPS/PPS out-of-band
+    /// (`Some(true)`), or a header-only record with `numOfArrays = 0`
+    /// (`Some(false)`) — common in WEB-DL repackages that leave parameter
+    /// sets in-band in the bitstream instead. `None` when the stream isn't
+    /// HEVC or extradata size wasn't reported. Used to pick between the
+    /// `hvc1` and `hev1` sample-entry tags when stream-copying to fMP4/HLS.
+    pub hevc_params_out_of_band: Option<bool>,
+}
+
 #[dto]
 pub struct MediaStream {
     pub aspect_ratio: Option<String>,
@@ -3085,6 +3115,8 @@ pub struct MediaStream {
     pub video_range: Option<VideoRange>,
     pub video_range_type: Option<VideoRangeType>,
     pub width: Option<i64>,
+    #[serde(rename = "remux")]
+    pub remux: Option<MediaStreamRemuxExt>,
 }
 
 impl MediaStream {

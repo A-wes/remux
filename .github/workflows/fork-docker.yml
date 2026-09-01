@@ -1,0 +1,37 @@
+name: Fork Docker Build
+
+# Manual trigger for building and pushing a Docker image from a fork, without
+# the upstream release/nightly automation. Pushes to this repo's own GHCR
+# namespace (ghcr.io/<owner>/<repo>) using the workflow's built-in
+# GITHUB_TOKEN — no secrets to configure.
+#
+# Run it: GitHub → Actions tab → "Fork Docker Build" → Run workflow.
+# Or via gh CLI: gh workflow run fork-docker.yml -f tag=my-tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Docker tag to publish (e.g. "shield-fix", "latest")'
+        required: true
+        default: "latest"
+      desktop:
+        description: "Also build desktop bundles (macOS/Windows/Linux) — slower, off by default"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ inputs.tag }}
+      docker_tags: "-t ghcr.io/${{ github.repository }}:${{ inputs.tag }}"
+      desktop: ${{ inputs.desktop }}
+      # arm64-only: this is for a single ARM SBC deployment, not a
+      # multi-platform release. Drop this input to build amd64+arm64 again.
+      docker_platforms: '[{"platform":"linux/arm64","runner":"ubuntu-24.04-arm","arch":"arm64"}]'
+    secrets: inherit
