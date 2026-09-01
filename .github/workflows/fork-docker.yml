@@ -1,9 +1,12 @@
 name: Fork Docker Build
 
-# Manual trigger for building and pushing a Docker image from a fork, without
-# the upstream release/nightly automation. Pushes to this repo's own GHCR
-# namespace (ghcr.io/<owner>/<repo>) using the workflow's built-in
-# GITHUB_TOKEN — no secrets to configure.
+# Manual trigger for building and pushing an arm64-only Docker image from a
+# fork — no amd64, no macOS/Windows desktop bundles, no dependency on the
+# upstream release/nightly pipeline. Runs entirely on a native arm64 GitHub
+# runner (ubuntu-24.04-arm), so nothing here is QEMU-emulated.
+#
+# Pushes to this repo's own GHCR namespace (ghcr.io/<owner>/<repo>) using the
+# workflow's built-in GITHUB_TOKEN — no secrets to configure.
 #
 # Run it: GitHub → Actions tab → "Fork Docker Build" → Run workflow.
 # Or via gh CLI: gh workflow run fork-docker.yml -f tag=my-tag
@@ -15,10 +18,6 @@ on:
         description: 'Docker tag to publish (e.g. "shield-fix", "latest")'
         required: true
         default: "latest"
-      desktop:
-        description: "Also build desktop bundles (macOS/Windows/Linux) — slower, off by default"
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -26,12 +25,104 @@ permissions:
 
 jobs:
   build:
-    uses: ./.github/workflows/build.yml
-    with:
-      version: ${{ inputs.tag }}
-      docker_tags: "-t ghcr.io/${{ github.repository }}:${{ inputs.tag }}"
-      desktop: ${{ inputs.desktop }}
-      # arm64-only: this is for a single ARM SBC deployment, not a
-      # multi-platform release. Drop this input to build amd64+arm64 again.
-      docker_platforms: '[{"platform":"linux/arm64","runner":"ubuntu-24.04-arm","arch":"arm64"}]'
-    secrets: inherit
+    name: Build and push (arm64)
+    runs-on: ubuntu-24.04-arm
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
+    steps:
+      - name: Compute lowercase image name
+        # GHCR requires an all-lowercase repository path; github.repository
+        # preserves whatever case the owner/repo actually has (e.g.
+        # "A-wes/remux"), which buildx rejects outright.
+        id: image
+        run: |
+          echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+
+      - name: Cache jellyfin-web dist
+        id: cache-web
+        uses: actions/cache@v4
+        with:
+          path: jellyfin-web/
+          key: jellyfin-web-v10.11.11
+
+      - name: Checkout jellyfin-web
+        if: steps.cache-web.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: jellyfin/jellyfin-web
+          ref: v10.11.11
+          path: jellyfin-web-src
+
+      - name: Setup Node
+        if: steps.cache-web.outputs.cache-hit != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: jellyfin-web-src/package-lock.json
+
+      - name: Build jellyfin-web
+        if: steps.cache-web.outputs.cache-hit != 'true'
+        working-directory: jellyfin-web-src
+        run: |
+          npm ci
+          npm run build:production
+          mv dist ../jellyfin-web
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: fork-docker-arm64
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install dioxus-cli
+        run: cargo binstall dioxus-cli@0.7.3 --no-confirm --force
+
+      - name: Build dashboard
+        working-directory: crates/remux-dashboard
+        run: ~/.cargo/bin/dx build --release
+
+      - name: Copy dashboard output
+        run: cp -r target/dx/remux-dashboard/release/web/public dashboard
+
+      - name: Build remux-server
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo build --release -p remux-server
+
+      - name: Copy server binary
+        run: |
+          cp target/release/remux-server .
+          chmod +x remux-server
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.image.outputs.name }}:${{ inputs.tag }}

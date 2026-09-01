@@ -33,21 +33,9 @@ on:
         type: boolean
         required: false
         default: true
-      docker_platforms:
-        description: >-
-          JSON array of {platform, runner, arch} objects for the Docker build
-          matrix. Leave default for amd64+arm64; pass a single-entry array to
-          build only one platform (e.g. an arm64-only SBC image).
-        type: string
-        required: false
-        default: '[{"platform":"linux/amd64","runner":"ubuntu-latest","arch":"amd64"},{"platform":"linux/arm64","runner":"ubuntu-24.04-arm","arch":"arm64"}]'
 
 env:
-  # Fork-relative by default: resolves to ghcr.io/lostb1t/remux on upstream's
-  # own repo, and to the calling fork's own GHCR namespace everywhere else.
-  # GHCR requires an all-lowercase path — if your GitHub username/org or repo
-  # name has uppercase letters, lowercase it manually when tagging.
-  REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
+  REGISTRY_IMAGE: ghcr.io/lostb1t/remux
 
 jobs:
   build-jellyfin-web:
@@ -435,7 +423,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.docker_platforms) }}
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
     steps:
       - name: Prepare
         run: |
@@ -475,8 +469,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: lostb1t
+          password: ${{ secrets.GH_TOKEN }}
 
       - name: Build and push by digest
         id: build
@@ -527,8 +521,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: lostb1t
+          password: ${{ secrets.GH_TOKEN }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
