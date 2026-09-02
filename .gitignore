@@ -8,6 +8,8 @@ bin/
 .kilo
 .codex
 .claude/
+CLAUDE.local.md
+SHIELD_PLAYBACK.md
 jellyfin-openapi-stable.json
 db.sqlite
 db.sqlite*
