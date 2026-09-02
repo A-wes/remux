@@ -1850,10 +1850,8 @@ async fn item_for_user(
     }
 
     // When streams were actually fetched but none found, replace the
-    // listing-style stubs with a single "No streams found" stub. Some items
-    // (e.g. flat/local media with no addon-resolved child Stream rows) still
-    // carry real probe data on the parent row itself — preserve it here
-    // rather than discarding known-good media_streams.
+    // listing-style stubs with a single "No streams found" stub. Items with
+    // probe data on the parent row keep their known media_streams.
     if needs_streams
         && matches!(media.kind, db::MediaKind::Movie | db::MediaKind::Episode)
         && media

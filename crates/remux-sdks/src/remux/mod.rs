@@ -3057,17 +3057,10 @@ pub struct UpdateUserPassword {
     pub reset_password: Option<bool>,
 }
 
-/// Additive `remux`-namespace extension fields for a `MediaStream`. See
-/// `MediaStreamRemuxExt::hevc_params_out_of_band` for why this exists.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct MediaStreamRemuxExt {
-    /// For an HEVC video stream: whether the source's probed extradata is a
-    /// full `HEVCDecoderConfigurationRecord` carrying VPS/SPS/PPS out-of-band
-    /// (`Some(true)`), or a header-only record with `numOfArrays = 0`
-    /// (`Some(false)`) — common in WEB-DL repackages that leave parameter
-    /// sets in-band in the bitstream instead. `None` when the stream isn't
-    /// HEVC or extradata size wasn't reported. Used to pick between the
-    /// `hvc1` and `hev1` sample-entry tags when stream-copying to fMP4/HLS.
+    /// HEVC only: whether extradata carries VPS/SPS/PPS out-of-band. Picks
+    /// between the `hvc1` and `hev1` sample-entry tags on stream copy.
     pub hevc_params_out_of_band: Option<bool>,
 }
 

@@ -50,8 +50,7 @@ pub struct TranscodeSession {
     pub source_video_codec: Option<String>,
     /// Codec name of the source audio stream (e.g. "eac3", "aac").
     pub source_audio_codec: Option<String>,
-    /// For an HEVC source: whether its extradata carries out-of-band
-    /// VPS/SPS/PPS (`Some(true)`) or is a header-only record (`Some(false)`),
+    /// Whether an HEVC source's extradata carries out-of-band VPS/SPS/PPS,
     /// used to pick the `hvc1`/`hev1` sample-entry tag on stream copy.
     pub source_hevc_params_out_of_band: Option<bool>,
     /// Profile of the source video stream (e.g. "Main 10"), used to generate

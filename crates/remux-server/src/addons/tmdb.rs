@@ -1317,13 +1317,9 @@ async fn fetch_tmdb_meta(
                         .and_then(|s| db::NonEmptyString::try_new(s.to_string()).ok()),
                     ..Default::default()
                 };
-                // Keep every ID the row already carries. TMDB knows nothing
-                // about `kitsu` / `custom_stremio_id`, and those are exactly what
-                // a Kitsu-imported anime's stable UUID is derived from — dropping
-                // them here makes `Media::validate` reject the row on the next
-                // upsert ("UUID mismatch") and the item silently disappears from
-                // its library. `custom_stremio_type` is required by the addon's
-                // own meta/stream routes, which 404 without it.
+                // Keep the IDs the row already has. TMDB knows nothing about
+                // kitsu/custom_stremio_id, and a Kitsu import's stable UUID is
+                // derived from them — dropping them fails validate on upsert.
                 external_ids.merge(ids, false);
                 let logo = movie_details
                     .images
@@ -1524,13 +1520,9 @@ async fn fetch_tmdb_meta(
                     tvdb: tmdb_ext.and_then(|e| e.tvdb_id),
                     ..Default::default()
                 };
-                // Keep every ID the row already carries. TMDB knows nothing
-                // about `kitsu` / `custom_stremio_id`, and those are exactly what
-                // a Kitsu-imported anime's stable UUID is derived from — dropping
-                // them here makes `Media::validate` reject the row on the next
-                // upsert ("UUID mismatch") and the item silently disappears from
-                // its library. `custom_stremio_type` is required by the addon's
-                // own meta/stream routes, which 404 without it.
+                // Keep the IDs the row already has. TMDB knows nothing about
+                // kitsu/custom_stremio_id, and a Kitsu import's stable UUID is
+                // derived from them — dropping them fails validate on upsert.
                 external_ids.merge(ids, false);
                 let country = tv_details
                     .origin_country

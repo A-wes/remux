@@ -2808,13 +2808,10 @@ impl Media {
         candidates
     }
 
-    /// Every UUID this row could legitimately be keyed under, derived from its
-    /// own external IDs — *including* the one it currently holds.
-    ///
-    /// `validate` needs the unfiltered set. An item whose canonical ID changed
-    /// after it was first written (anime imported from Kitsu that later gains an
-    /// IMDB ID, promoting `imdb` over `custom_stremio_id` in the ranking) still
-    /// legitimately owns the UUID it was stored and linked under.
+    /// As `ext_id_uuid_candidates`, but keeps the row's current UUID. `validate`
+    /// needs the unfiltered set: a row whose canonical ID changed after it was
+    /// written (Kitsu anime that later gains an IMDB ID) still owns the UUID it
+    /// was stored under.
     fn ext_id_uuid_all(item: &Self) -> Vec<Uuid> {
         use crate::common::stable_media_uuid;
         let kind = &item.kind;
@@ -8405,13 +8402,10 @@ mod tests {
         );
     }
 
-    /// Regression: anime imported from the Kitsu catalog derives its stable
-    /// UUID from `custom_stremio_id` ("kitsu:N"), the only identity it has —
-    /// anime is often absent from IMDB. TMDB enrichment used to rebuild
-    /// `ExternalIds` from scratch, dropping `kitsu`/`custom_stremio_id`, so
-    /// `validate` rejected the row on the next upsert ("UUID mismatch") and the
-    /// series silently vanished from the library that imported it. IDs below are
-    /// the real ones from a production refresh ("Daemons of the Shadow Realm").
+    /// Regression: a Kitsu-imported series derives its UUID from
+    /// `custom_stremio_id`, often its only identity. TMDB enrichment rebuilt
+    /// `ExternalIds` from scratch, so `validate` then rejected the row and the
+    /// series vanished from its library.
     #[test]
     fn kitsu_series_still_validates_after_tmdb_enrichment() {
         let mut media = Media {

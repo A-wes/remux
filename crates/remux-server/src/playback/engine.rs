@@ -289,11 +289,8 @@ pub struct TranscodeParams {
     /// Codec of the source audio stream (e.g. "aac", "ac3"), used to apply
     /// codec-specific bitstream filters such as `aac_adtstoasc` when copying.
     pub source_audio_codec: Option<String>,
-    /// For an HEVC source: whether its extradata carries out-of-band
-    /// VPS/SPS/PPS (`Some(true)`) or is a header-only record (`Some(false)`).
-    /// `Some(false)` selects the `hev1` sample-entry tag instead of `hvc1`
-    /// on stream copy, since forcing `hvc1` on such a source yields an empty
-    /// `hvcC` box (see `hevc_copy_tag`).
+    /// Whether an HEVC source's extradata carries out-of-band VPS/SPS/PPS,
+    /// used to pick the sample-entry tag on copy (see `hevc_copy_tag`).
     pub source_hevc_params_out_of_band: Option<bool>,
     pub accelerator: Box<dyn Accelerator>,
     /// HDR type of the source video, used to decide whether tone-mapping or
@@ -364,19 +361,10 @@ impl Default for TranscodeParams {
     }
 }
 
-/// HLS/mp4 sample-entry tag for a stream-copied HEVC video track.
-///
-/// `hvc1` requires the sample entry to carry VPS/SPS/PPS out-of-band in
-/// `hvcC`. When the source's own extradata is a bare
-/// `HEVCDecoderConfigurationRecord` (header only, no parameter-set arrays —
-/// seen in some WEB-DL repackages that keep parameter sets in-band in the
-/// bitstream instead), ffmpeg copies that deficient record through verbatim
-/// and writes an effectively empty `hvcC`, which strict HEVC parsers (e.g.
-/// ExoPlayer's `HevcConfig.parse`) reject outright, killing playback before
-/// any video decodes. `hev1` permits in-band parameter sets and degrades
-/// gracefully in that case, so fall back to it only when we have positive
-/// evidence the out-of-band data is missing; default to `hvc1` otherwise
-/// (unknown or confirmed-present), preserving existing behavior.
+/// Sample-entry tag for a stream-copied HEVC track. `hvc1` demands out-of-band
+/// parameter sets; with a header-only source record ffmpeg copies it through
+/// and writes an empty `hvcC` that strict parsers (ExoPlayer) reject, so use
+/// `hev1`, which allows them in-band. Defaults to `hvc1` when unknown.
 fn hevc_copy_tag(source_hevc_params_out_of_band: Option<bool>) -> &'static str {
     if source_hevc_params_out_of_band == Some(false) {
         "hev1"
@@ -2432,10 +2420,7 @@ mod tests {
 
     #[test]
     fn hls_hevc_copy_without_out_of_band_params_uses_hev1() {
-        // A source whose extradata is a bare, header-only
-        // HEVCDecoderConfigurationRecord (parameter sets live in-band
-        // instead) must not be forced into hvc1 — that yields an empty
-        // hvcC box that ExoPlayer rejects. Fall back to hev1.
+        // Forcing hvc1 here would write an empty hvcC that ExoPlayer rejects.
         let dir = PathBuf::from("/tmp/test_hev1_fallback");
         let args = build_hls_args(&TranscodeParams {
             video_codec: "copy".into(),

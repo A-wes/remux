@@ -298,20 +298,11 @@ pub fn db_state_to_dto(
     }
 }
 
-/// Stub sources for items without resolvable sources: two entries so
-/// multi-version clients (e.g. Infuse) expose a version picker.
-/// A single placeholder `MediaSourceInfo` for an item whose real sources
-/// haven't been resolved for this request (e.g. the caller's `fields` didn't
-/// request `MediaSources`) or resolved to none.
-///
-/// Must always be exactly one real (non-null) entry: some Jellyfin clients
-/// read `MediaSources` straight off a `GET /Items/{id}` response and select
-/// an entry without an intervening `PlaybackInfo` call (e.g. playing
-/// directly from a resume/continue-watching row) — a missing or empty
-/// `MediaSources` array crashes those clients outright rather than showing
-/// an error. Preserves any `media_streams` already known from the item's own
-/// probe data (e.g. flat/local media with no addon-resolved child Stream
-/// rows) rather than discarding them.
+/// The single placeholder source for an item whose real sources weren't
+/// resolved for this request, or resolved to none. Must stay exactly one
+/// non-null entry: clients that read `MediaSources` off `GET /Items/{id}`
+/// without a `PlaybackInfo` call (e.g. a resume row) crash on an empty array.
+/// Keeps any streams the item's own probe data already provides.
 fn stub_sources(media: &db::Media) -> Vec<MediaSourceInfo> {
     let media_streams = media
         .probe_data
@@ -1047,12 +1038,8 @@ pub fn db_media_to_item(media: db::Media, hide_sources: bool) -> BaseItemDto {
     item.external_urls = external_urls;
 
     // several dlients require at least one stream
-    //
-    // `Stream` is included because Android TV refetches an item by MediaSource
-    // id when the user picks a different version, and `item_for_user` answers
-    // that by resolving the Stream row and setting `sources` to the row itself.
-    // Leaving the kind out here dropped that work on the floor and returned a
-    // response with no `MediaSources` at all.
+    // `Stream` is here because Android TV refetches an item by MediaSource id
+    // when switching versions; without it that response has no MediaSources.
     if !hide_sources
         && (media.kind == db::MediaKind::Movie
             || media.kind == db::MediaKind::Episode
@@ -1236,16 +1223,9 @@ pub struct RemoteSubtitleInfo {
 mod tests {
     use super::*;
 
-    /// Regression: `GET /Items/{id}` where `{id}` is a MediaSource id — the
-    /// request Android TV makes when the user switches versions — resolved the
-    /// Stream row and then returned it with `MediaSources` absent entirely,
-    /// because `Stream` was missing from the list of kinds that emit the field.
-    ///
-    /// A client that reads `MediaSources` off that response without a
-    /// `PlaybackInfo` round-trip gets null. Jellyfin for Android TV dereferences
-    /// it unguarded and dies with
-    /// `NullPointerException: ...MediaSourceInfo.getMediaStreams()` in
-    /// `PlaybackController.buildExoPlayerOptions`, then relaunches and repeats.
+    /// Regression: `GET /Items/{id}` on a MediaSource id — what Android TV
+    /// requests when switching versions — omitted `MediaSources` entirely,
+    /// which the client dereferences unguarded and crashes on.
     #[test]
     fn db_media_to_item_emits_media_sources_for_a_stream_row() {
         let row = db::Media {
@@ -1270,10 +1250,8 @@ mod tests {
 
     #[test]
     fn stub_sources_is_always_exactly_one_real_entry() {
-        // A client that skips PlaybackInfo and plays straight off
-        // MediaSources (e.g. from a resume row) must find a real object at
-        // MediaSources[0], never a missing/empty array — that's what causes
-        // the null-MediaSourceInfo crash this fallback exists to prevent.
+        // A client playing straight off MediaSources without a PlaybackInfo
+        // call must find a real object at index 0, never an empty array.
         let media = db::Media {
             kind: db::MediaKind::Movie,
             title: "Test Movie".into(),
@@ -1285,10 +1263,8 @@ mod tests {
 
     #[test]
     fn stub_sources_preserves_media_streams_known_from_the_item_s_own_probe_data() {
-        // Flat/local media can carry probe data directly on the parent row
-        // with no addon-resolved child Stream rows. When that happens this
-        // fallback must not discard the already-known streams (e.g. subtitle
-        // tracks a language-preference fallback still needs to see).
+        // Flat/local media carries probe data on the parent row with no child
+        // Stream rows; those streams must survive the fallback.
         let media = db::Media {
             kind: db::MediaKind::Movie,
             title: "Test Movie".into(),
