@@ -3226,6 +3226,20 @@ impl Media {
         db: &SqlitePool,
         filter: &MediaFilter,
     ) -> Result<FilterResult<Media>> {
+        use tokio_util::future::FutureExt;
+        Self::get_by_filter_inner(db, filter)
+            .timeout(std::time::Duration::from_secs(30))
+            .await
+            .map_err(|_| {
+                error!(?filter, "get_by_filter timed out after 30s");
+                anyhow!("get_by_filter timed out after 30s: {filter:?}")
+            })?
+    }
+
+    async fn get_by_filter_inner(
+        db: &SqlitePool,
+        filter: &MediaFilter,
+    ) -> Result<FilterResult<Media>> {
         let is_manual_collection = filter
             .parent
             .as_ref()
@@ -3654,7 +3668,27 @@ impl Media {
                     for k in related_kinds {
                         sep.push_bind(k);
                     }
-                    qb.push("))");
+                    qb.push(")");
+                    if is_genre_scope_query {
+                        if let Some(ref rules) = filter.filter_rules {
+                            qb.push(
+                                " AND item.id IN (SELECT media.id FROM media WHERE 1 = 1",
+                            );
+                            apply_filter_rules(
+                                qb,
+                                rules,
+                                filter
+                                    .user_id
+                                    .as_ref(),
+                                // Independent subquery: it does not join the
+                                // watched CTE, so the played-true rule must be
+                                // applied inline rather than suppressed.
+                                false,
+                            );
+                            qb.push(")");
+                        }
+                    }
+                    qb.push(")");
                 }
             }
             if let Some(grandparent_id) = &filter.grandparent_id {
@@ -3986,45 +4020,50 @@ impl Media {
                     .push_bind(after);
             }
 
-            if let Some(ref f) = filter.filter_rules {
-                // When the query targets child types (episodes/seasons), the
-                // collection filter rules describe which series qualify — not the
-                // episode rows themselves. Apply them via a grandparent subquery so
-                // only children of matching series are returned.
-                let all_episode_or_season = filter
-                    .kind
-                    .as_ref()
-                    .map(|k| {
-                        !k.is_empty()
-                            && k.iter()
-                                .all(|k| {
-                                    matches!(k, MediaKind::Episode | MediaKind::Season)
-                                })
-                    })
-                    .unwrap_or(false);
+            if !is_genre_scope_query {
+                if let Some(ref f) = filter.filter_rules {
+                    // When the query targets child types (episodes/seasons), the
+                    // collection filter rules describe which series qualify — not the
+                    // episode rows themselves. Apply them via a grandparent subquery so
+                    // only children of matching series are returned.
+                    let all_episode_or_season = filter
+                        .kind
+                        .as_ref()
+                        .map(|k| {
+                            !k.is_empty()
+                                && k.iter()
+                                    .all(|k| {
+                                        matches!(
+                                            k,
+                                            MediaKind::Episode | MediaKind::Season
+                                        )
+                                    })
+                        })
+                        .unwrap_or(false);
 
-                if all_episode_or_season {
-                    if let Some(fragment) = build_filter_rules_fragment(
-                        f,
-                        filter
-                            .user_id
-                            .as_ref(),
-                        false,
-                    ) {
-                        qb.push(format!(
-                            " AND grandparent_id IN \
+                    if all_episode_or_season {
+                        if let Some(fragment) = build_filter_rules_fragment(
+                            f,
+                            filter
+                                .user_id
+                                .as_ref(),
+                            false,
+                        ) {
+                            qb.push(format!(
+                                " AND grandparent_id IN \
                             (SELECT id FROM media WHERE kind = 'series' AND {fragment})"
-                        ));
+                            ));
+                        }
+                    } else {
+                        apply_filter_rules(
+                            qb,
+                            f,
+                            filter
+                                .user_id
+                                .as_ref(),
+                            use_watched_cte,
+                        );
                     }
-                } else {
-                    apply_filter_rules(
-                        qb,
-                        f,
-                        filter
-                            .user_id
-                            .as_ref(),
-                        use_watched_cte,
-                    );
                 }
             }
             if let Some(ref ids) = filter.exclude_ids {
